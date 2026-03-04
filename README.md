@@ -13,8 +13,17 @@ apifactorise_refactored/
 │
 ├── ui/                           # Interface utilisateur
 │   ├── __init__.py
-│   ├── main.py                   # ComptabiliteApp (interface principale)
-│   └── dialogs.py                # DialogueLigne (dialogue d'édition)
+│   ├── comptabilite_app.py       # ComptabiliteApp (interface principale)
+│   └── journal_dialogs.py        # DialogueLigne (dialogue d'édition)
+│
+├── services/                     # Logique metier/testable
+│   ├── journal_service.py
+│   ├── financial_calculations.py
+│   └── invoice_ocr.py
+│
+├── docs/
+│   ├── guides/                   # Guides et scripts de reference
+│   └── audit/                    # Rapports d'audit technique
 │
 └── utils/                        # Fonctions utilitaires
     ├── __init__.py
@@ -43,7 +52,7 @@ Gestion complète des données Excel :
 - `DataManager` : Lecture/écriture de feuilles Excel
 - `PCGManager` : Gestion du Plan Comptable Général
 
-#### **ui/main.py**
+#### **ui/comptabilite_app.py**
 Interface principale comptable :
 - `ComptabiliteApp` : Application Tkinter complète
   - Menu Fichier et États Financiers
@@ -51,7 +60,7 @@ Interface principale comptable :
   - Barres de recherche et statistiques
   - Actions : Ajouter, Modifier, Supprimer, Balance
 
-#### **ui/dialogs.py**
+#### **ui/journal_dialogs.py**
 Dialogues modaux :
 - `DialogueLigne` : Dialogue pour créer/modifier une écriture
   - Champs de date, libellé, montants
@@ -83,6 +92,22 @@ pip install -r requirements.txt
 - Le moteur par defaut est **EasyOCR** (installe via `pip install -r requirements.txt`).
 - Tesseract reste disponible en fallback si EasyOCR est indisponible.
 - Formats supportes: `PNG/JPG/...` et `PDF` (3 premieres pages).
+- Pour PDF: extraction texte native + OCR de secours (meilleure robustesse sur PDF mixtes).
+- L'ecran de previsualisation affiche un score de confiance OCR et des alertes de verification.
+
+### ✅ Qualite code
+
+Installer les outils dev:
+```bash
+pip install -r requirements-dev.txt
+```
+
+Executer les controles:
+```bash
+ruff check .
+black --check .
+python -m unittest discover -s tests -p "test_*.py"
+```
 
 #### Importer les modules individuels
 ```python
@@ -110,7 +135,7 @@ montant_affiche = format_montant(1234.56)  # "1 234,56"
 
 ### 📝 Notes d'Implémentation
 
-- Les imports relatifs sont utilisés avec `sys.path.insert(0, ...)` pour assurer la compatibilité
+- Les imports Python sont alignes sur la structure paquet (`ui/`, `services/`, `models/`, `utils/`)
 - Les messages d'erreur Tkinter sont conservés pour l'expérience utilisateur
 - La structure pandas est maintenue pour la compatibilité avec Excel
 - Les commentaires docstring suivent la convention standard Python
@@ -124,7 +149,7 @@ Si vous aviez du code qui utilisait `apifactorise.py` directement, remplacez-le 
 from apifactorise import ComptabiliteApp
 
 # Nouveau
-from ui.main import ComptabiliteApp
+from ui.comptabilite_app import ComptabiliteApp
 from models.data import DataManager, PCGManager
 from config import CONFIG
 ```

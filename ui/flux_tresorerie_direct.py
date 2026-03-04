@@ -9,10 +9,10 @@ import unicodedata
 
 import pandas as pd
 
-from config import CONFIG
-from models.data import DataManager
 from services.financial_calculations import compute_resultat_net_exercice
+from services.journal_service import extract_years, load_journal_dataframe
 from utils.exports import export_treeview_to_excel, export_treeview_to_pdf
+from utils.system import open_path
 from .settings import load_header_settings, format_header_text
 
 
@@ -55,34 +55,7 @@ class FluxTresorerieDirectWindow(tk.Toplevel):
         return None
 
     def _charger_annees_disponibles(self):
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        candidates = [
-            os.path.join(base_dir, 'LivreCompta.xlsx'),
-            os.path.join(base_dir, 'EtatFiFolder', 'LivreCompta.xlsx')
-        ]
-
-        df = None
-        for fichier in candidates:
-            if os.path.exists(fichier):
-                df = DataManager.charger_feuille(fichier, CONFIG['feuille_journal'])
-                if df is not None:
-                    break
-
-        annees_fixes = [str(y) for y in range(2020, 2031)]
-
-        if df is None or 'Année' not in df.columns:
-            return sorted(annees_fixes, reverse=True)
-
-        annees_data = df['Année'].dropna().astype(str).unique().tolist()
-        toutes_annees = set(annees_fixes) | set(annees_data)
-
-        def _sort_key(v):
-            try:
-                return int(v)
-            except Exception:
-                return -9999
-
-        return sorted(toutes_annees, key=_sort_key, reverse=True)
+        return extract_years(load_journal_dataframe())
 
     def _to_float(self, value):
         if pd.isna(value):
@@ -118,21 +91,7 @@ class FluxTresorerieDirectWindow(tk.Toplevel):
         return base
 
     def _preparer_journal(self):
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        candidates = [
-            os.path.join(base_dir, 'LivreCompta.xlsx'),
-            os.path.join(base_dir, 'EtatFiFolder', 'LivreCompta.xlsx')
-        ]
-
-        df = None
-        for fichier in candidates:
-            if os.path.exists(fichier):
-                df = DataManager.charger_feuille(fichier, CONFIG['feuille_journal'])
-                if df is not None:
-                    break
-
-        if df is None:
-            df = pd.DataFrame(columns=CONFIG['colonnes_journal'])
+        df = load_journal_dataframe()
 
         for col in ['Année', 'CompteDébit', 'CompteCrédit', 'MontantDébit', 'MontantCrédit']:
             if col not in df.columns:
@@ -522,9 +481,7 @@ class FluxTresorerieDirectWindow(tk.Toplevel):
             self.tree.insert('', tk.END, values=values)
 
     def _ouvrir_mapping_csv(self):
-        try:
-            os.startfile(MAPPING_CSV)
-        except Exception:
+        if not open_path(MAPPING_CSV):
             messagebox.showinfo('Info', f'Mapping disponible ici:\n{MAPPING_CSV}', parent=self)
 
     def _export_excel(self):

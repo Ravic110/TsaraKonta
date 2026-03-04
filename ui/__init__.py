@@ -1,5 +1,5 @@
 """Module d'interface utilisateur"""
-from .dialogs import DialogueLigne
-from .main import ComptabiliteApp
+from .journal_dialogs import DialogueLigne
+from .comptabilite_app import ComptabiliteApp
 
 __all__ = ['DialogueLigne', 'ComptabiliteApp']

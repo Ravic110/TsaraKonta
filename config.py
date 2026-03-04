@@ -1,9 +1,11 @@
 """
 Configuration centralisée de l'application comptable
 """
+import os
 
 CONFIG = {
-    'fichier_defaut': "EtatFidata.xlsx",
+    'base_dir': os.path.dirname(os.path.abspath(__file__)),
+    'fichier_defaut': os.path.join("EtatFiFolder", "LivreCompta.xlsx"),
     'fichier_pcg': "pcg.xlsx",
     'feuille_journal': "Journal",
     'feuille_pcg': "pcg",

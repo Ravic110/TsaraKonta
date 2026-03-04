@@ -4,14 +4,30 @@ Dialogues pour l'ajout et modification d'écritures comptables
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
-import sys
-import os
 
-# Ajout du chemin parent pour les imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CONFIG
 from utils.formatters import parse_montant, extraire_numero_compte
 import pandas as pd
+
+
+def coerce_journal_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise les types de colonnes journal pour eviter les erreurs pandas setitem."""
+    normalized = df.copy()
+
+    text_columns = ['Date', 'Libellé', 'DateValeur', 'CompteDébit', 'CompteCrédit', 'Année']
+    numeric_columns = ['MontantDébit', 'MontantCrédit']
+
+    for col in text_columns:
+        if col not in normalized.columns:
+            normalized[col] = ''
+        normalized[col] = normalized[col].fillna('').astype(str)
+
+    for col in numeric_columns:
+        if col not in normalized.columns:
+            normalized[col] = 0.0
+        normalized[col] = pd.to_numeric(normalized[col], errors='coerce').fillna(0.0).astype(float)
+
+    return normalized
 
 
 class DialogueLigne(tk.Toplevel):
@@ -29,7 +45,7 @@ class DialogueLigne(tk.Toplevel):
             donnees: données de la ligne à éditer (si applicable)
         """
         super().__init__(parent)
-        self.df_modifie = df.copy()
+        self.df_modifie = coerce_journal_dtypes(df)
         self.ajout = ajout
         self.index = index
         self.resultat = False
@@ -153,9 +169,9 @@ class DialogueLigne(tk.Toplevel):
                     self.df_modifie.iloc[self.index, self.df_modifie.columns.get_loc(key)] = value
             self.resultat = True
             self.destroy()
-        except ValueError:
+        except (ValueError, TypeError):
             from tkinter import messagebox
-            messagebox.showerror("Erreur", "Vérifiez les montants (format: 1234,56)")
+            messagebox.showerror("Erreur", "Vérifiez les données saisies (montants/comptes/année).")
     
     def preparer_ligne(self):
         """Prépare le dictionnaire de la ligne pour pandas"""
@@ -165,7 +181,7 @@ class DialogueLigne(tk.Toplevel):
             'DateValeur': self.vars['Date Valeur'].get(),
             'MontantDébit': parse_montant(self.montant_debit_var.get()),
             'MontantCrédit': parse_montant(self.montant_credit_var.get()),
-            'CompteDébit': self.compte_debit_var.get(),
-            'CompteCrédit': self.compte_credit_var.get(),
-            'Année': self.vars['Année'].get()
+            'CompteDébit': str(self.compte_debit_var.get() or '').strip(),
+            'CompteCrédit': str(self.compte_credit_var.get() or '').strip(),
+            'Année': str(self.vars['Année'].get() or '').strip()
         }

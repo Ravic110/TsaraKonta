@@ -8,8 +8,8 @@ from tkinter import ttk
 import pandas as pd
 
 from config import CONFIG
-from models.data import DataManager
 from services.financial_calculations import compute_resultat_net_exercice
+from services.journal_service import extract_years, load_journal_dataframe
 from utils.exports import export_treeview_to_excel, export_treeview_to_pdf
 from .settings import load_header_settings, format_header_text
 
@@ -26,25 +26,8 @@ class BilanPassifWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
 
-        livre_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LivreCompta.xlsx')
-        if os.path.exists(livre_file):
-            self.df = DataManager.charger_feuille(livre_file, CONFIG['feuille_journal'])
-            if self.df is None:
-                self.df = pd.DataFrame(columns=CONFIG['colonnes_journal'])
-        else:
-            self.df = df if df is not None else pd.DataFrame(columns=CONFIG['colonnes_journal'])
-
-        annees_data = self.df['Année'].dropna().astype(str).unique().tolist() if 'Année' in self.df.columns else []
-        annees_fixes = [str(y) for y in range(2020, 2031)]
-        toutes_annees = set(annees_fixes) | set(annees_data)
-
-        def _sort_key(v):
-            try:
-                return int(v)
-            except Exception:
-                return -9999
-
-        self.annees = sorted(toutes_annees, key=_sort_key, reverse=True)
+        self.df = load_journal_dataframe(df_fallback=df)
+        self.annees = extract_years(self.df)
         self.header_settings = load_header_settings()
         self.header_text = format_header_text(self.header_settings)
 

@@ -6,7 +6,7 @@ Pour lancer l'application:
     python main.py
 """
 import tkinter as tk
-from ui.main import ComptabiliteApp
+from ui.comptabilite_app import ComptabiliteApp
 
 
 def main():

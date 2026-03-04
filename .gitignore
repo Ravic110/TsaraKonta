@@ -103,11 +103,12 @@ cython_debug/
 # Logs
 *.log
 
-# Other
-*.csv
+# OCR saved drafts
+EtatFiFolder/ocr_saved/
 
 # ignore data directories
 EtatFiFolder/exports/
+EtatFiFolder/logs/
 
-# Audit reports
-audit/
+# Audit reports (generated / local)
+docs/audit/*.tmp
