@@ -9,6 +9,7 @@ import pandas as pd
 
 from config import CONFIG
 from models.data import DataManager
+from services.financial_calculations import compute_resultat_net_exercice
 from utils.exports import export_treeview_to_excel, export_treeview_to_pdf
 from .settings import load_header_settings, format_header_text
 
@@ -218,39 +219,11 @@ class BilanPassifWindow(tk.Toplevel):
         return self._fmt_or_dash(valeur_courante), self._fmt_or_dash(valeur_precedente)
 
     def _resultat_net_exercice_etat_resultat(self, annee):
-        chiffres_affaires = self._sum_soldes(['70', '701', '702', '703', '705', '706', '707', '708', '7082', '7083', '7085', '7086', '7088'], annee, negate=True)
-        production_stockee = self._sum_soldes(['71', '711', '713', '714'], annee, negate=True)
-        production_immobilisee = self._sum_soldes(['72', '721', '722'], annee, negate=True)
-
-        achat_consommes = self._sum_soldes(['60', '601', '602', '6022', '6023', '60231', '60232', '60237', '60221', '60222', '60223', '60225', '603', '6031', '6032', '6037', '604', '605', '606', '6061', '6062', '6063', '6064', '6068', '607', '608'], annee)
-        services_exterieurs = self._sum_soldes(['61', '611', '612', '613', '6132', '6135', '6136', '614', '615', '616', '617', '618', '62', '621', '622', '623', '624', '6241', '6242', '625', '626', '627', '628'], annee)
-
-        charges_personnel = self._sum_soldes(['64', '641', '644', '644', '645', '646', '647', '648'], annee)
-        impots_taxes = self._sum_soldes(['63', '631', '635'], annee)
-
-        autres_produits_operationnels = self._sum_soldes(['74', '741', '748', '75', '751', '752', '753', '754', '755', '756', '757', '758'], annee, negate=True)
-        autres_charges_operationnelles = self._sum_soldes(['65', '651', '652', '653', '654', '655', '656', '657', '658'], annee)
-
-        dotations_amortissements = self._sum_soldes(['68', '681', '685'], annee)
-        produits_financiers = self._sum_soldes(['76', '761', '762', '763', '764', '766', '767', '768'], annee, negate=True)
-        charges_financieres = self._sum_soldes(['66', '661', '664', '665', '666', '667', '668'], annee)
-
-        elements_extra_produits = self._sum_soldes(['77'], annee, negate=True)
-        elements_extra_charges = self._sum_soldes(['67'], annee)
-
-        impots_exigibles_resultats = self._sum_soldes(['69', '695', '698'], annee)
-        impots_differes_variations = self._sum_soldes(['692', '693'], annee)
-
-        production_exercice = chiffres_affaires + production_stockee + production_immobilisee
-        consommation_exercice = achat_consommes + services_exterieurs
-        valeur_ajoutee = production_exercice - consommation_exercice
-        excedent_brut_exploitation = valeur_ajoutee - charges_personnel - impots_taxes
-        resultat_operationnel = autres_produits_operationnels - autres_charges_operationnelles
-        resultat_financier = produits_financiers - charges_financieres
-        resultat_avant_impot = excedent_brut_exploitation - dotations_amortissements + resultat_operationnel + resultat_financier
-        resultat_extraordinaire = elements_extra_produits - elements_extra_charges
-
-        return resultat_avant_impot - impots_exigibles_resultats + impots_differes_variations + resultat_extraordinaire
+        return compute_resultat_net_exercice(
+            sum_charge=lambda prefixes: self._sum_soldes(prefixes, annee),
+            sum_produit=lambda prefixes: self._sum_soldes(prefixes, annee, negate=True),
+            charges_personnel_prefixes=['64', '641', '644', '644', '645', '646', '647', '648'],
+        )
 
     def _fx_resultat_net(self):
         annee_courante, annee_precedente = self._annees_selectionnees()

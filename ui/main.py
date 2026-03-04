@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CONFIG
 from models.data import DataManager, PCGManager
 from utils.formatters import format_montant
+from utils.logging_config import get_app_logger
 from .dialogs import DialogueLigne
 from .etat_resultat import CompteResultatNatureWindow
 from .etat_resultat_fonction import CompteResultatFonctionWindow
@@ -22,6 +23,9 @@ from .flux_tresorerie_direct import FluxTresorerieDirectWindow
 from .flux_tresorerie_indirect import FluxTresorerieIndirectWindow
 from .ratios import RatioResultatNatureWindow, RatioResultatFonctionWindow, RatioBilanWindow
 from .settings import SettingsWindow
+from .invoice_ocr import extract_invoice_data_from_file
+
+logger = get_app_logger(__name__)
 
 
 class ComptabiliteApp(tk.Frame):
@@ -63,6 +67,7 @@ class ComptabiliteApp(tk.Frame):
             except Exception:
                 messagebox.showinfo('Info', f'Emplacement: {folder}')
         menu.add_command(label="Ouvrir dossier exports", command=_ouvrir_exports_folder)
+        menu.add_command(label="Scanner facture (OCR)", command=self.scanner_facture_ocr)
         menu.add_command(label="Charger Excel", command=self.charger_fichier)
         menu.add_command(label="Sauvegarder", command=self.sauvegarder)
         menu.add_separator()
@@ -151,6 +156,7 @@ class ComptabiliteApp(tk.Frame):
         
         actions = [
             ("Ajouter", self.ajouter_ligne),
+            ("Importer facture", self.scanner_facture_ocr),
             ("Modifier", self.modifier_ligne),
             ("Supprimer", self.supprimer_ligne),
             ("Balance", self.afficher_balance)
@@ -282,6 +288,197 @@ class ComptabiliteApp(tk.Frame):
             self.fichier_excel = fichier
             self.charger_pcg()
             self.charger_donnees()
+
+    def _load_invoice_preview_image(self, path: str, max_size=(640, 820)):
+        """Construit une image Tk pour la previsualisation facture (image/PDF)."""
+        ext = os.path.splitext(path.lower())[1]
+        pil_image = None
+        try:
+            if ext == ".pdf":
+                try:
+                    import pypdfium2 as pdfium  # type: ignore
+                except Exception:
+                    return None, "Apercu PDF indisponible (pypdfium2 manquant)."
+                pdf = pdfium.PdfDocument(path)
+                if len(pdf) == 0:
+                    pdf.close()
+                    return None, "PDF vide."
+                page = pdf[0]
+                bitmap = page.render(scale=1.5)
+                pil_image = bitmap.to_pil().convert("RGB")
+                page.close()
+                pdf.close()
+            else:
+                from PIL import Image  # type: ignore
+                with Image.open(path) as image:
+                    pil_image = image.convert("RGB").copy()
+        except Exception as exc:
+            return None, f"Apercu indisponible: {exc}"
+
+        if pil_image is None:
+            return None, "Apercu indisponible."
+
+        pil_image.thumbnail(max_size)
+        try:
+            from PIL import ImageTk  # type: ignore
+            return ImageTk.PhotoImage(pil_image), None
+        except Exception as exc:
+            return None, f"Apercu indisponible (ImageTk): {exc}"
+
+    def _demander_confirmation_previsualisation(self, path: str, data: dict) -> bool:
+        """Affiche une previsualisation facture et demande confirmation d'import."""
+        modal = tk.Toplevel(self.master)
+        modal.title("Previsualisation facture OCR")
+        modal.geometry("980x700")
+        modal.transient(self.master)
+        modal.grab_set()
+
+        result = {"confirm": False}
+
+        ttk.Label(
+            modal,
+            text=f"Fichier: {os.path.basename(path)}",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ttk.Label(modal, text=path).pack(anchor="w", padx=12, pady=(0, 10))
+
+        body = ttk.Frame(modal, padding=(10, 0, 10, 10))
+        body.pack(fill=tk.BOTH, expand=True)
+        body.columnconfigure(0, weight=2)
+        body.columnconfigure(1, weight=3)
+        body.rowconfigure(0, weight=1)
+
+        preview_frame = ttk.LabelFrame(body, text="Apercu facture")
+        preview_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        preview_img, preview_error = self._load_invoice_preview_image(path)
+        if preview_img is not None:
+            image_label = ttk.Label(preview_frame, image=preview_img)
+            image_label.image = preview_img
+            image_label.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        else:
+            ttk.Label(
+                preview_frame,
+                text=preview_error or "Apercu indisponible.",
+                foreground="gray",
+                anchor="center",
+                justify=tk.CENTER,
+            ).pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        details_frame = ttk.LabelFrame(body, text="Donnees detectees")
+        details_frame.grid(row=0, column=1, sticky="nsew")
+        details_frame.columnconfigure(1, weight=1)
+        champs = [
+            ("Date", data.get("date", "")),
+            ("Date valeur", data.get("date_valeur", "")),
+            ("Montant debit", format_montant(float(data.get("montant_debit", 0.0) or 0.0))),
+            ("Libelle", data.get("libelle", "")),
+            ("Compte debit", data.get("compte_debit", "")),
+            ("Compte credit", data.get("compte_credit", "")),
+            ("Annee", data.get("annee", "")),
+        ]
+        for idx, (label, value) in enumerate(champs):
+            ttk.Label(details_frame, text=f"{label}:", font=("Segoe UI", 9, "bold")).grid(
+                row=idx, column=0, sticky="nw", padx=(10, 6), pady=(6, 0)
+            )
+            ttk.Label(details_frame, text=str(value), wraplength=430, justify=tk.LEFT).grid(
+                row=idx, column=1, sticky="nw", padx=(0, 10), pady=(6, 0)
+            )
+
+        ttk.Label(details_frame, text="Texte OCR:", font=("Segoe UI", 9, "bold")).grid(
+            row=len(champs), column=0, sticky="nw", padx=(10, 6), pady=(10, 0)
+        )
+        ocr_text = tk.Text(details_frame, height=16, wrap=tk.WORD)
+        ocr_text.grid(row=len(champs), column=1, sticky="nsew", padx=(0, 10), pady=(10, 10))
+        details_frame.rowconfigure(len(champs), weight=1)
+        ocr_text.insert("1.0", data.get("ocr_text", "") or "")
+        ocr_text.config(state=tk.DISABLED)
+
+        btn_row = ttk.Frame(modal, padding=(10, 0, 10, 10))
+        btn_row.pack(fill=tk.X)
+
+        def _annuler():
+            result["confirm"] = False
+            modal.destroy()
+
+        def _importer():
+            result["confirm"] = True
+            modal.destroy()
+
+        ttk.Button(btn_row, text="Annuler", command=_annuler).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(btn_row, text="Importer l'ecriture", command=_importer).pack(side=tk.RIGHT)
+
+        modal.protocol("WM_DELETE_WINDOW", _annuler)
+        self.master.wait_window(modal)
+        return result["confirm"]
+
+    def scanner_facture_ocr(self):
+        """Scanne une facture (image/PDF) et pre-remplit une ecriture."""
+        path = filedialog.askopenfilename(
+            title="Selectionner une facture a scanner",
+            filetypes=[
+                ("Factures", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp *.pdf"),
+                ("Images", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
+                ("PDF", "*.pdf"),
+            ],
+        )
+        if not path:
+            return
+
+        logger.info("Demande import facture OCR: %s", path)
+        try:
+            data = extract_invoice_data_from_file(path)
+        except FileNotFoundError:
+            logger.error("Import facture annule: fichier introuvable.")
+            messagebox.showerror("OCR facture", "Fichier introuvable.")
+            return
+        except ValueError as exc:
+            logger.warning("OCR facture parse incomplet: %s", exc)
+            messagebox.showerror(
+                "OCR facture",
+                f"Le texte OCR a ete lu, mais l'analyse a echoue:\n{exc}\n\n"
+                "Consultez les logs: EtatFiFolder/logs/app.log",
+            )
+            return
+        except RuntimeError as exc:
+            logger.error("OCR facture indisponible: %s", exc)
+            messagebox.showerror(
+                "OCR facture",
+                f"Service OCR non disponible:\n{exc}\n\n"
+                "Vous pouvez installer EasyOCR: pip install easyocr\n"
+                "Consultez les logs: EtatFiFolder/logs/app.log",
+            )
+            return
+        except Exception as exc:
+            logger.exception("Erreur inattendue OCR facture.")
+            messagebox.showerror(
+                "OCR facture",
+                f"Impossible de scanner la facture:\n{exc}\n\n"
+                "Pre-requis:\n- pip install -r requirements.txt\n\n"
+                "Option fallback systeme:\n"
+                "- installer Tesseract OCR sur la machine\n\n"
+                "Consultez les logs: EtatFiFolder/logs/app.log",
+            )
+            return
+
+        if not self._demander_confirmation_previsualisation(path, data):
+            logger.info("Import facture annule par utilisateur apres previsualisation.")
+            return
+
+        montant = float(data.get("montant_debit", 0.0) or 0.0)
+        montant_str = format_montant(montant).replace(".", ",")
+        donnees = [
+            data.get("date", ""),
+            data.get("libelle", "Facture OCR"),
+            data.get("date_valeur", ""),
+            montant_str,
+            format_montant(0.0).replace(".", ","),
+            data.get("compte_debit", "607"),
+            data.get("compte_credit", "401"),
+            data.get("annee", ""),
+        ]
+
+        self.ouvrir_dialogue(True, donnees=donnees)
+        logger.info("Facture OCR importee avec succes: montant=%s libelle=%s", montant, data.get("libelle", ""))
     
     def afficher_balance(self):
         """Affiche la balance du journal"""

@@ -71,6 +71,19 @@ Fonctions utilitaires :
 python main.py
 ```
 
+### 🧾 OCR Factures
+
+Une action `Fichier > Scanner facture (OCR)` permet d'importer une facture (image/PDF), extraire automatiquement date/montant/libelle, puis pre-remplir une ecriture comptable.
+
+Prerequis OCR:
+```bash
+pip install -r requirements.txt
+```
+- Optionnel: installer le binaire systeme **Tesseract OCR** (commande `tesseract`) pour activer le fallback `pytesseract`.
+- Le moteur par defaut est **EasyOCR** (installe via `pip install -r requirements.txt`).
+- Tesseract reste disponible en fallback si EasyOCR est indisponible.
+- Formats supportes: `PNG/JPG/...` et `PDF` (3 premieres pages).
+
 #### Importer les modules individuels
 ```python
 from models.data import DataManager, PCGManager

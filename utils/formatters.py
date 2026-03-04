@@ -13,7 +13,7 @@ def format_montant(montant):
     Returns:
         str: montant formaté avec séparateurs
     """
-    return f"{montant:,.2f}".replace(',', ' ')
+    return f"{montant:,.2f}".replace(',', 'X').replace('.', ',').replace('X', ' ')
 
 
 def parse_montant(value_str):

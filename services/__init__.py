@@ -1,0 +1,2 @@
+"""Services metier partages."""
+
