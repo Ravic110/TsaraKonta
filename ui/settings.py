@@ -210,13 +210,15 @@ class OperationTypesWindow(tk.Toplevel):
         ttk.Label(form, text="Type operation:").grid(row=1, column=0, sticky="w", pady=4, padx=(8, 6))
         ttk.Entry(form, textvariable=self.type_var).grid(row=1, column=1, sticky="ew", pady=4, padx=(0, 8))
         ttk.Label(form, text="Compte debit:").grid(row=2, column=0, sticky="w", pady=4, padx=(8, 6))
-        self.debit_combo = ttk.Combobox(form, textvariable=self.debit_var, values=self.pcg_values)
+        self.debit_combo = ttk.Combobox(form, textvariable=self.debit_var, values=self.pcg_values, width=36)
         self.debit_combo.grid(row=2, column=1, sticky="ew", pady=4, padx=(0, 8))
         ttk.Label(form, text="Compte credit:").grid(row=3, column=0, sticky="w", pady=4, padx=(8, 6))
-        self.credit_combo = ttk.Combobox(form, textvariable=self.credit_var, values=self.pcg_values)
+        self.credit_combo = ttk.Combobox(form, textvariable=self.credit_var, values=self.pcg_values, width=36)
         self.credit_combo.grid(row=3, column=1, sticky="ew", pady=4, padx=(0, 8))
         self._bind_compte_combo(self.debit_combo, self.debit_var)
         self._bind_compte_combo(self.credit_combo, self.credit_var)
+        self.debit_combo.configure(postcommand=lambda c=self.debit_combo: self._ensure_dropdown_xscroll(c))
+        self.credit_combo.configure(postcommand=lambda c=self.credit_combo: self._ensure_dropdown_xscroll(c))
 
         btns = ttk.Frame(form)
         btns.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 6), padx=8)
@@ -319,6 +321,35 @@ class OperationTypesWindow(tk.Toplevel):
 
         combo.bind("<KeyRelease>", _filter)
         combo.bind("<<ComboboxSelected>>", _select)
+
+    def _ensure_dropdown_xscroll(self, combo: ttk.Combobox):
+        """Ajoute un scroll horizontal directement dans la liste déroulante du Combobox."""
+        try:
+            popdown = combo.tk.call("ttk::combobox::PopdownWindow", str(combo))
+            listbox_path = f"{popdown}.f.l"
+            frame_path = f"{popdown}.f"
+            xsb_path = f"{frame_path}.xsb"
+
+            if not int(combo.tk.call("winfo", "exists", listbox_path)):
+                return
+            listbox = combo.nametowidget(listbox_path)
+            frame = combo.nametowidget(frame_path)
+
+            if int(combo.tk.call("winfo", "exists", xsb_path)):
+                xsb = combo.nametowidget(xsb_path)
+            else:
+                xsb = tk.Scrollbar(frame, name="xsb", orient=tk.HORIZONTAL, command=listbox.xview)
+                xsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+            listbox.configure(xscrollcommand=xsb.set)
+            # Largeur de popup plus confortable pour les libellés longs.
+            try:
+                listbox.configure(width=max(48, int(combo.cget("width")) + 8))
+            except Exception:
+                pass
+        except Exception:
+            # Fallback silencieux si la plateforme ne supporte pas ce hook Tk interne.
+            return
 
     def _add_row(self):
         row = self._read_form()
