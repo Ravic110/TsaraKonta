@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox
 import pandas as pd
 
 from models.data import DataManager
+from utils.formatters import extraire_numero_compte
 
 STATE_FOLDER = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EtatFiFolder')
 SETTINGS_FILE = os.path.join(STATE_FOLDER, 'settings.json')
@@ -144,10 +145,25 @@ class OperationTypesWindow(tk.Toplevel):
         self.grab_set()
 
         self.settings_path = DataManager.resolve_operation_settings_file()
+        self.pcg_values = self._load_pcg_values()
         self.df = pd.DataFrame(columns=OP_COLUMNS)
         self.selected_index = None
         self._build()
         self._load()
+
+    def _load_pcg_values(self):
+        pcg_df, _pcg_path = DataManager.load_pcg_dataframe()
+        if pcg_df is None or pcg_df.empty:
+            return ["Saisir manuellement"]
+        values = []
+        for _, row in pcg_df.iterrows():
+            numero = str(row.get("NUMERO", "") or "").strip()
+            libelle = str(row.get("LIBELLE", "") or "").strip()
+            if numero and libelle:
+                values.append(f"{numero} - {libelle}")
+            elif numero:
+                values.append(numero)
+        return values if values else ["Saisir manuellement"]
 
     def _build(self):
         root = ttk.Frame(self, padding=10)
@@ -194,9 +210,13 @@ class OperationTypesWindow(tk.Toplevel):
         ttk.Label(form, text="Type operation:").grid(row=1, column=0, sticky="w", pady=4, padx=(8, 6))
         ttk.Entry(form, textvariable=self.type_var).grid(row=1, column=1, sticky="ew", pady=4, padx=(0, 8))
         ttk.Label(form, text="Compte debit:").grid(row=2, column=0, sticky="w", pady=4, padx=(8, 6))
-        ttk.Entry(form, textvariable=self.debit_var).grid(row=2, column=1, sticky="ew", pady=4, padx=(0, 8))
+        self.debit_combo = ttk.Combobox(form, textvariable=self.debit_var, values=self.pcg_values)
+        self.debit_combo.grid(row=2, column=1, sticky="ew", pady=4, padx=(0, 8))
         ttk.Label(form, text="Compte credit:").grid(row=3, column=0, sticky="w", pady=4, padx=(8, 6))
-        ttk.Entry(form, textvariable=self.credit_var).grid(row=3, column=1, sticky="ew", pady=4, padx=(0, 8))
+        self.credit_combo = ttk.Combobox(form, textvariable=self.credit_var, values=self.pcg_values)
+        self.credit_combo.grid(row=3, column=1, sticky="ew", pady=4, padx=(0, 8))
+        self._bind_compte_combo(self.debit_combo, self.debit_var)
+        self._bind_compte_combo(self.credit_combo, self.credit_var)
 
         btns = ttk.Frame(form)
         btns.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 6), padx=8)
@@ -260,11 +280,17 @@ class OperationTypesWindow(tk.Toplevel):
         return str(max_id + 1)
 
     def _read_form(self):
+        debit_value = self.debit_var.get().strip()
+        credit_value = self.credit_var.get().strip()
+        if " - " in debit_value:
+            debit_value = extraire_numero_compte(debit_value)
+        if " - " in credit_value:
+            credit_value = extraire_numero_compte(credit_value)
         row = {
             "ID_PARAMETRE": self.id_var.get().strip() or self._next_id(),
             "TYPE OPERATION": self.type_var.get().strip(),
-            "DEBIT": self.debit_var.get().strip(),
-            "CREDIT": self.credit_var.get().strip(),
+            "DEBIT": debit_value,
+            "CREDIT": credit_value,
         }
         if not row["TYPE OPERATION"]:
             messagebox.showwarning("Operations", "Le type d'operation est obligatoire.", parent=self)
@@ -273,6 +299,26 @@ class OperationTypesWindow(tk.Toplevel):
             messagebox.showwarning("Operations", "Les comptes debit/credit sont obligatoires.", parent=self)
             return None
         return row
+
+    def _bind_compte_combo(self, combo: ttk.Combobox, var: tk.StringVar):
+        def _filter(_event=None):
+            query = var.get().strip()
+            if not query:
+                combo["values"] = self.pcg_values
+                return
+            if self.pcg_values == ["Saisir manuellement"]:
+                combo["values"] = self.pcg_values
+                return
+            filtered = [v for v in self.pcg_values if query in v.split(" - ")[0]]
+            combo["values"] = filtered if filtered else self.pcg_values
+
+        def _select(_event=None):
+            selected = var.get().strip()
+            if " - " in selected:
+                var.set(extraire_numero_compte(selected))
+
+        combo.bind("<KeyRelease>", _filter)
+        combo.bind("<<ComboboxSelected>>", _select)
 
     def _add_row(self):
         row = self._read_form()
