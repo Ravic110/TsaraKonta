@@ -10,7 +10,7 @@ from datetime import datetime
 
 from config import CONFIG
 from models.data import DataManager, PCGManager
-from utils.formatters import format_montant
+from utils.formatters import format_montant, extraire_numero_compte, parse_montant
 from utils.logging_config import get_app_logger
 from utils.system import open_path
 from .journal_dialogs import DialogueLigne
@@ -21,7 +21,7 @@ from .bilan_passif import BilanPassifWindow
 from .flux_tresorerie_direct import FluxTresorerieDirectWindow
 from .flux_tresorerie_indirect import FluxTresorerieIndirectWindow
 from .ratios import RatioResultatNatureWindow, RatioResultatFonctionWindow, RatioBilanWindow
-from .settings import SettingsWindow
+from .settings import SettingsWindow, OperationTypesWindow, PCGWindow
 from services.invoice_ocr import extract_invoice_data_from_file
 
 logger = get_app_logger(__name__)
@@ -82,6 +82,8 @@ class ComptabiliteApp(tk.Frame):
         menu = tk.Menu(self.master, tearoff=0)
         # Paramétrage (entête société)
         menu.add_command(label="Paramétrage", command=lambda: SettingsWindow(self.master))
+        menu.add_command(label="Gestion types d'opérations", command=lambda: OperationTypesWindow(self.master))
+        menu.add_command(label="Gestion PCG", command=lambda: PCGWindow(self.master))
         # Ouvrir le dossier d'exports
         def _ouvrir_exports_folder():
             folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EtatFiFolder', 'exports')
@@ -90,6 +92,7 @@ class ComptabiliteApp(tk.Frame):
                 messagebox.showinfo('Info', f'Emplacement: {folder}')
         menu.add_command(label="Ouvrir dossier exports", command=_ouvrir_exports_folder)
         menu.add_command(label="Scanner facture (OCR)", command=self.scanner_facture_ocr)
+        menu.add_command(label="Importer JSON OCR vers journal", command=self.importer_json_ocr_vers_journal)
         menu.add_command(label="Charger Excel", command=self.charger_fichier)
         menu.add_command(label="Sauvegarder", command=self.sauvegarder)
         menu.add_separator()
@@ -245,10 +248,12 @@ class ComptabiliteApp(tk.Frame):
         for col in CONFIG['colonnes_journal']:
             if col not in self.df.columns:
                 self.df[col] = 0.0 if col in ['MontantDébit', 'MontantCrédit'] else ''
-        
+
+        auto_imported, _auto_errors = self._import_pending_ocr_json(show_messages=False)
         self.afficher_donnees(self.df)
         self.mettre_a_jour_stats()
-        self._set_status(f"Fichier: {os.path.basename(self.fichier_excel)} | {len(self.df)} écritures")
+        suffix = f" | OCR auto-importés: {auto_imported}" if auto_imported else ""
+        self._set_status(f"Fichier: {os.path.basename(self.fichier_excel)} | {len(self.df)} écritures{suffix}")
     
     def sauvegarder(self):
         """Sauvegarde les données dans Excel"""
@@ -340,6 +345,7 @@ class ComptabiliteApp(tk.Frame):
             "invoice_subject": parsed.get("invoice_subject", ""),
             "date": parsed.get("date", ""),
             "date_valeur": parsed.get("date_valeur", ""),
+            "type_operation": parsed.get("type_operation", ""),
             "libelle": parsed.get("libelle", ""),
             "montant_debit": float(parsed.get("montant_debit", 0.0) or 0.0),
             "montant_credit": float(parsed.get("montant_credit", 0.0) or 0.0),
@@ -463,26 +469,128 @@ class ComptabiliteApp(tk.Frame):
         form_vars = {
             "date": tk.StringVar(value=str(data.get("date", "") or "")),
             "date_valeur": tk.StringVar(value=str(data.get("date_valeur", "") or "")),
+            "type_operation": tk.StringVar(value=""),
             "montant_debit": tk.StringVar(value=format_montant(float(data.get("montant_debit", 0.0) or 0.0))),
             "libelle": tk.StringVar(value=str(data.get("libelle", "") or "")),
             "compte_debit": tk.StringVar(value=str(data.get("compte_debit", "607") or "607")),
             "compte_credit": tk.StringVar(value=str(data.get("compte_credit", "401") or "401")),
             "annee": tk.StringVar(value=str(data.get("annee", "") or "")),
         }
-        form_rows = [
+        operation_types = DataManager.load_operation_types()
+        operation_mapping = {
+            item.get("type_operation", ""): item
+            for item in operation_types
+            if item.get("type_operation")
+        }
+
+        def _apply_operation_type(*_args):
+            selected = form_vars["type_operation"].get().strip()
+            if not selected:
+                return
+            mapped = operation_mapping.get(selected)
+            if not mapped:
+                return
+            debit = str(mapped.get("debit", "") or "").strip()
+            credit = str(mapped.get("credit", "") or "").strip()
+            if debit:
+                form_vars["compte_debit"].set(debit)
+            if credit:
+                form_vars["compte_credit"].set(credit)
+
+        base_rows = [
             ("Date", "date"),
             ("Date valeur", "date_valeur"),
+        ]
+        row_idx = 0
+        for label, key in base_rows:
+            ttk.Label(form_frame, text=f"{label}:", font=("Segoe UI", 9, "bold")).grid(
+                row=row_idx, column=0, sticky="w", pady=(2, 0), padx=(0, 6)
+            )
+            ttk.Entry(form_frame, textvariable=form_vars[key]).grid(row=row_idx, column=1, sticky="ew", pady=(2, 0))
+            row_idx += 1
+
+        ttk.Label(form_frame, text="Type operation:", font=("Segoe UI", 9, "bold")).grid(
+            row=row_idx, column=0, sticky="w", pady=(2, 0), padx=(0, 6)
+        )
+        operation_values = [item["type_operation"] for item in operation_types]
+        operation_combo = ttk.Combobox(
+            form_frame,
+            textvariable=form_vars["type_operation"],
+            values=operation_values,
+            state="readonly" if operation_values else "normal",
+        )
+        operation_combo.grid(row=row_idx, column=1, sticky="ew", pady=(2, 0))
+        row_idx += 1
+
+        remaining_rows = [
             ("Montant debit", "montant_debit"),
             ("Libelle", "libelle"),
             ("Compte debit", "compte_debit"),
             ("Compte credit", "compte_credit"),
             ("Annee", "annee"),
         ]
-        for idx, (label, key) in enumerate(form_rows):
+        compte_combos = {}
+        for label, key in remaining_rows:
             ttk.Label(form_frame, text=f"{label}:", font=("Segoe UI", 9, "bold")).grid(
-                row=idx, column=0, sticky="w", pady=(2, 0), padx=(0, 6)
+                row=row_idx, column=0, sticky="w", pady=(2, 0), padx=(0, 6)
             )
-            ttk.Entry(form_frame, textvariable=form_vars[key]).grid(row=idx, column=1, sticky="ew", pady=(2, 0))
+            if key in {"compte_debit", "compte_credit"}:
+                compte_values = self.pcg_comptes if self.pcg_comptes else ["Saisir manuellement"]
+                combo = ttk.Combobox(form_frame, textvariable=form_vars[key], values=compte_values)
+                combo.grid(row=row_idx, column=1, sticky="ew", pady=(2, 0))
+                compte_combos[key] = combo
+            else:
+                ttk.Entry(form_frame, textvariable=form_vars[key]).grid(row=row_idx, column=1, sticky="ew", pady=(2, 0))
+            row_idx += 1
+
+        def _filter_compte_options(key: str):
+            combo = compte_combos.get(key)
+            if not combo:
+                return
+            recherche = str(form_vars[key].get() or "").strip()
+            if self.pcg_comptes and recherche:
+                filtre = [c for c in self.pcg_comptes if recherche in c.split(" - ")[0]]
+                combo["values"] = filtre if filtre else self.pcg_comptes
+            else:
+                combo["values"] = self.pcg_comptes if self.pcg_comptes else ["Saisir manuellement"]
+
+        def _bind_compte_combo(key: str):
+            combo = compte_combos.get(key)
+            if not combo:
+                return
+
+            def _on_key_release(_event):
+                _filter_compte_options(key)
+
+            def _on_select(_event):
+                selected = str(form_vars[key].get() or "")
+                if " - " in selected:
+                    form_vars[key].set(extraire_numero_compte(selected))
+
+            combo.bind("<KeyRelease>", _on_key_release)
+            combo.bind("<<ComboboxSelected>>", _on_select)
+
+        _bind_compte_combo("compte_debit")
+        _bind_compte_combo("compte_credit")
+
+        initial_type = str(data.get("type_operation", "") or "").strip()
+        if initial_type and initial_type in operation_mapping:
+            form_vars["type_operation"].set(initial_type)
+        elif operation_types:
+            current_debit = str(form_vars["compte_debit"].get() or "").strip()
+            current_credit = str(form_vars["compte_credit"].get() or "").strip()
+            matched = next(
+                (
+                    item["type_operation"]
+                    for item in operation_types
+                    if str(item.get("debit", "")).strip() == current_debit
+                    and str(item.get("credit", "")).strip() == current_credit
+                ),
+                operation_types[0]["type_operation"],
+            )
+            form_vars["type_operation"].set(matched)
+        operation_combo.bind("<<ComboboxSelected>>", _apply_operation_type)
+        _apply_operation_type()
 
         summary_parts = []
         if data.get("invoice_number"):
@@ -563,6 +671,7 @@ class ComptabiliteApp(tk.Frame):
                 {
                     "date": form_vars["date"].get().strip(),
                     "date_valeur": form_vars["date_valeur"].get().strip(),
+                    "type_operation": form_vars["type_operation"].get().strip(),
                     "montant_debit": montant,
                     "libelle": form_vars["libelle"].get().strip(),
                     "compte_debit": form_vars["compte_debit"].get().strip(),
@@ -682,6 +791,128 @@ class ComptabiliteApp(tk.Frame):
 
         self._enregistrer_ocr_import(path, confirmed)
         logger.info("Facture OCR importee avec succes: montant=%s libelle=%s", montant, confirmed.get("libelle", ""))
+
+    def _coerce_amount(self, raw_value) -> float:
+        """Convertit un montant OCR (str/float/int) en float."""
+        if raw_value is None:
+            return 0.0
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        try:
+            return parse_montant(str(raw_value))
+        except Exception:
+            return 0.0
+
+    def _build_journal_row_from_ocr_payload(self, payload: dict) -> dict:
+        """Construit une ligne du journal a partir d'un payload JSON OCR."""
+        date_value = str(payload.get("date", "") or "").strip()
+        annee = str(payload.get("annee", "") or "").strip()
+        if not annee and len(date_value) >= 10:
+            # format attendu: JJ/MM/AAAA
+            parts = date_value.split("/")
+            if len(parts) == 3 and len(parts[2]) == 4 and parts[2].isdigit():
+                annee = parts[2]
+        return {
+            "Date": date_value,
+            "Libellé": str(payload.get("libelle", "Facture OCR") or "Facture OCR").strip(),
+            "DateValeur": str(payload.get("date_valeur", "") or "").strip(),
+            "MontantDébit": self._coerce_amount(payload.get("montant_debit", 0.0)),
+            "MontantCrédit": self._coerce_amount(payload.get("montant_credit", 0.0)),
+            "CompteDébit": str(payload.get("compte_debit", "607") or "607").strip(),
+            "CompteCrédit": str(payload.get("compte_credit", "401") or "401").strip(),
+            "Année": annee,
+        }
+
+    def _ocr_saved_dir(self) -> str:
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "EtatFiFolder", "ocr_saved")
+
+    def _get_imported_ocr_json_sources(self) -> set[str]:
+        imported_sources = set()
+        ocr_df = DataManager.charger_feuille(self.fichier_excel, "OCR_Imports")
+        if ocr_df is None or ocr_df.empty or "source_file" not in ocr_df.columns:
+            return imported_sources
+        for value in ocr_df["source_file"].fillna("").astype(str):
+            path = value.strip()
+            if path and path.lower().endswith(".json"):
+                imported_sources.add(os.path.normpath(path))
+        return imported_sources
+
+    def _import_json_ocr_paths(self, json_paths, show_messages: bool = True):
+        if self.df is None:
+            self.df = pd.DataFrame(columns=CONFIG['colonnes_journal'])
+
+        imported_sources = self._get_imported_ocr_json_sources()
+        imported_count = 0
+        skipped_count = 0
+        errors = []
+
+        for path in json_paths:
+            norm_path = os.path.normpath(path)
+            if norm_path in imported_sources:
+                skipped_count += 1
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                if not isinstance(payload, dict):
+                    raise ValueError("Le contenu JSON doit etre un objet.")
+                row = self._build_journal_row_from_ocr_payload(payload)
+                self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
+                self._enregistrer_ocr_import(path, payload)
+                imported_sources.add(norm_path)
+                imported_count += 1
+            except Exception as exc:
+                errors.append(f"{os.path.basename(path)}: {exc}")
+
+        if imported_count > 0:
+            self.afficher_donnees(self.df)
+            self.mettre_a_jour_stats()
+            self.sauvegarder()
+            self._set_status(f"{imported_count} JSON OCR importé(s) dans le journal")
+
+        if show_messages:
+            if errors:
+                details = "\n".join(errors[:8])
+                if len(errors) > 8:
+                    details += "\n..."
+                messagebox.showwarning(
+                    "Import JSON OCR",
+                    f"Importés: {imported_count}\nIgnorés (déjà importés): {skipped_count}\nErreurs: {len(errors)}\n\n{details}",
+                )
+            elif imported_count > 0 or skipped_count > 0:
+                messagebox.showinfo(
+                    "Import JSON OCR",
+                    f"Importés: {imported_count}\nIgnorés (déjà importés): {skipped_count}",
+                )
+        return imported_count, skipped_count, errors
+
+    def _import_pending_ocr_json(self, show_messages: bool = False):
+        save_dir = self._ocr_saved_dir()
+        os.makedirs(save_dir, exist_ok=True)
+        json_paths = sorted(
+            [
+                os.path.join(save_dir, name)
+                for name in os.listdir(save_dir)
+                if name.lower().endswith(".json")
+            ]
+        )
+        if not json_paths:
+            return 0, []
+        imported_count, _skipped_count, errors = self._import_json_ocr_paths(json_paths, show_messages=show_messages)
+        return imported_count, errors
+
+    def importer_json_ocr_vers_journal(self):
+        """Importe un ou plusieurs JSON OCR dans le Journal comptable."""
+        default_dir = self._ocr_saved_dir()
+        os.makedirs(default_dir, exist_ok=True)
+        json_paths = filedialog.askopenfilenames(
+            title="Selectionner les JSON OCR a importer",
+            initialdir=default_dir,
+            filetypes=[("JSON", "*.json")],
+        )
+        if not json_paths:
+            return
+        self._import_json_ocr_paths(json_paths, show_messages=True)
     
     def afficher_balance(self):
         """Affiche la balance du journal"""

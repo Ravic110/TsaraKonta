@@ -2,6 +2,8 @@
 Gestion des données Excel et du Plan Comptable Général
 """
 import os
+import re
+import unicodedata
 import pandas as pd
 from tkinter import messagebox
 from config import CONFIG
@@ -127,6 +129,178 @@ class DataManager:
         row_df = pd.DataFrame([row_dict])
         combined = pd.concat([existing, row_df], ignore_index=True)
         return DataManager.sauvegarder_df(combined, fichier, feuille)
+
+    @staticmethod
+    def _normalize_column_name(name: str) -> str:
+        text = unicodedata.normalize("NFKD", str(name or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.lower().strip()
+        return re.sub(r"[^a-z0-9]+", "", text)
+
+    @staticmethod
+    def operation_settings_candidates(settings_file: str | None = None):
+        """Retourne les chemins candidats du fichier de parametres operations."""
+        base_dir = CONFIG.get('base_dir') or os.path.dirname(os.path.dirname(__file__))
+        candidates = []
+        if settings_file:
+            candidates.append(settings_file)
+        candidates.extend(
+            [
+                os.path.join(base_dir, "sittings.xlsx"),
+                os.path.join(base_dir, "Sittings.xlsx"),
+                os.path.join(base_dir, "Settings.xlsx"),
+            ]
+        )
+
+        seen = set()
+        ordered = []
+        for path in candidates:
+            norm = os.path.normpath(path)
+            if norm not in seen:
+                seen.add(norm)
+                ordered.append(path)
+        return ordered
+
+    @staticmethod
+    def resolve_operation_settings_file(settings_file: str | None = None):
+        """Retourne le meilleur chemin pour le fichier de parametrage operations."""
+        candidates = DataManager.operation_settings_candidates(settings_file)
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def load_operation_types_dataframe(settings_file: str | None = None):
+        """Charge la table operations en DataFrame normalise.
+
+        Colonnes attendues (variantes acceptees): TYPE OPERATION, DEBIT, CREDIT.
+        """
+        empty = pd.DataFrame(columns=["ID_PARAMETRE", "TYPE OPERATION", "DEBIT", "CREDIT"])
+        for path in DataManager.operation_settings_candidates(settings_file):
+            if not os.path.exists(path):
+                continue
+            try:
+                xl = pd.ExcelFile(path)
+            except Exception:
+                continue
+
+            for sheet_name in xl.sheet_names:
+                try:
+                    df = pd.read_excel(path, sheet_name=sheet_name)
+                except Exception:
+                    continue
+                if df is None or df.empty:
+                    continue
+
+                normalized_cols = {
+                    DataManager._normalize_column_name(col): col for col in df.columns
+                }
+                type_col = normalized_cols.get("typeoperation")
+                debit_col = normalized_cols.get("debit")
+                credit_col = normalized_cols.get("credit")
+                id_col = normalized_cols.get("idparametre")
+
+                if not type_col or not debit_col or not credit_col:
+                    continue
+
+                result = []
+                for _, row in df.iterrows():
+                    label = str(row.get(type_col, "") or "").strip()
+                    if not label:
+                        continue
+                    result.append(
+                        {
+                            "id_parametre": str(row.get(id_col, "") or "").strip() if id_col else "",
+                            "type_operation": label,
+                            "debit": str(row.get(debit_col, "") or "").strip(),
+                            "credit": str(row.get(credit_col, "") or "").strip(),
+                        }
+                    )
+                if result:
+                    normalized = pd.DataFrame(result).rename(
+                        columns={
+                            "id_parametre": "ID_PARAMETRE",
+                            "type_operation": "TYPE OPERATION",
+                            "debit": "DEBIT",
+                            "credit": "CREDIT",
+                        }
+                    )
+                    return normalized[["ID_PARAMETRE", "TYPE OPERATION", "DEBIT", "CREDIT"]], path
+                return empty.copy(), path
+        return empty.copy(), DataManager.resolve_operation_settings_file(settings_file)
+
+    @staticmethod
+    def save_operation_types_dataframe(df: pd.DataFrame, settings_file: str | None = None):
+        """Sauvegarde la table operations dans le fichier de parametrage."""
+        target = DataManager.resolve_operation_settings_file(settings_file)
+        if not target:
+            return False
+        payload = df.copy()
+        expected = ["ID_PARAMETRE", "TYPE OPERATION", "DEBIT", "CREDIT"]
+        for col in expected:
+            if col not in payload.columns:
+                payload[col] = ""
+        payload = payload[expected]
+        return DataManager.sauvegarder_df(payload, target, "Feuil1")
+
+    @staticmethod
+    def load_operation_types(settings_file: str | None = None):
+        """Charge les types d'operations depuis un fichier Excel de parametrage."""
+        df, _path = DataManager.load_operation_types_dataframe(settings_file=settings_file)
+        if df is None or df.empty:
+            return []
+        result = []
+        for _, row in df.iterrows():
+            result.append(
+                {
+                    "id_parametre": str(row.get("ID_PARAMETRE", "") or "").strip(),
+                    "type_operation": str(row.get("TYPE OPERATION", "") or "").strip(),
+                    "debit": str(row.get("DEBIT", "") or "").strip(),
+                    "credit": str(row.get("CREDIT", "") or "").strip(),
+                }
+            )
+        return result
+
+    @staticmethod
+    def resolve_pcg_file(pcg_file: str | None = None):
+        """Retourne le chemin du fichier PCG."""
+        base_dir = CONFIG.get('base_dir') or os.path.dirname(os.path.dirname(__file__))
+        configured = pcg_file or CONFIG.get('fichier_pcg') or "pcg.xlsx"
+        return configured if os.path.isabs(configured) else os.path.join(base_dir, configured)
+
+    @staticmethod
+    def load_pcg_dataframe(pcg_file: str | None = None):
+        """Charge le PCG en DataFrame normalise (colonnes: NUMERO, LIBELLE)."""
+        path = DataManager.resolve_pcg_file(pcg_file)
+        empty = pd.DataFrame(columns=["NUMERO", "LIBELLE"])
+        if not path or not os.path.exists(path):
+            return empty.copy(), path
+        df = DataManager.charger_feuille(path, CONFIG['feuille_pcg'])
+        if df is None or df.empty or len(df.columns) < 2:
+            return empty.copy(), path
+        normalized = pd.DataFrame(
+            {
+                "NUMERO": df.iloc[:, 0].fillna("").astype(str).str.strip(),
+                "LIBELLE": df.iloc[:, 1].fillna("").astype(str).str.strip(),
+            }
+        )
+        normalized = normalized[(normalized["NUMERO"] != "") | (normalized["LIBELLE"] != "")]
+        normalized = normalized.reset_index(drop=True)
+        return normalized, path
+
+    @staticmethod
+    def save_pcg_dataframe(df: pd.DataFrame, pcg_file: str | None = None):
+        """Sauvegarde le DataFrame PCG dans la feuille configuree."""
+        target = DataManager.resolve_pcg_file(pcg_file)
+        if not target:
+            return False
+        payload = df.copy()
+        for col in ["NUMERO", "LIBELLE"]:
+            if col not in payload.columns:
+                payload[col] = ""
+        payload = payload[["NUMERO", "LIBELLE"]]
+        return DataManager.sauvegarder_df(payload, target, CONFIG['feuille_pcg'])
 
 
 class PCGManager:

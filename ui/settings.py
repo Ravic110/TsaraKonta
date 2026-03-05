@@ -6,9 +6,14 @@ import os
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox
+import pandas as pd
+
+from models.data import DataManager
 
 STATE_FOLDER = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EtatFiFolder')
 SETTINGS_FILE = os.path.join(STATE_FOLDER, 'settings.json')
+OP_COLUMNS = ["ID_PARAMETRE", "TYPE OPERATION", "DEBIT", "CREDIT"]
+PCG_COLUMNS = ["NUMERO", "LIBELLE"]
 
 DEFAULT = {
     'nom_societe': '',
@@ -125,3 +130,341 @@ class SettingsWindow(tk.Toplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror('Erreur', f'Impossible d\'enregistrer: {e}')
+
+
+class OperationTypesWindow(tk.Toplevel):
+    """Fenetre CRUD pour les types d'operations comptables (sittings/settings.xlsx)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Gestion des types d'operations")
+        self.geometry("860x460")
+        self.transient(parent)
+        self.grab_set()
+
+        self.settings_path = DataManager.resolve_operation_settings_file()
+        self.df = pd.DataFrame(columns=OP_COLUMNS)
+        self.selected_index = None
+        self._build()
+        self._load()
+
+    def _build(self):
+        root = ttk.Frame(self, padding=10)
+        root.pack(fill=tk.BOTH, expand=True)
+        root.columnconfigure(0, weight=3)
+        root.columnconfigure(1, weight=2)
+        root.rowconfigure(1, weight=1)
+
+        self.path_var = tk.StringVar(value="")
+        ttk.Label(root, textvariable=self.path_var, foreground="#4A5A57").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        table_frame = ttk.LabelFrame(root, text="Operations")
+        table_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(table_frame, columns=OP_COLUMNS, show="headings", height=14)
+        self.tree.heading("ID_PARAMETRE", text="ID")
+        self.tree.heading("TYPE OPERATION", text="Type operation")
+        self.tree.heading("DEBIT", text="Debit")
+        self.tree.heading("CREDIT", text="Credit")
+        self.tree.column("ID_PARAMETRE", width=70, anchor=tk.CENTER)
+        self.tree.column("TYPE OPERATION", width=330, anchor=tk.W)
+        self.tree.column("DEBIT", width=90, anchor=tk.CENTER)
+        self.tree.column("CREDIT", width=90, anchor=tk.CENTER)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        form = ttk.LabelFrame(root, text="Edition")
+        form.grid(row=1, column=1, sticky="nsew")
+        form.columnconfigure(1, weight=1)
+
+        self.id_var = tk.StringVar()
+        self.type_var = tk.StringVar()
+        self.debit_var = tk.StringVar()
+        self.credit_var = tk.StringVar()
+
+        ttk.Label(form, text="ID:").grid(row=0, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.id_var).grid(row=0, column=1, sticky="ew", pady=4, padx=(0, 8))
+        ttk.Label(form, text="Type operation:").grid(row=1, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.type_var).grid(row=1, column=1, sticky="ew", pady=4, padx=(0, 8))
+        ttk.Label(form, text="Compte debit:").grid(row=2, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.debit_var).grid(row=2, column=1, sticky="ew", pady=4, padx=(0, 8))
+        ttk.Label(form, text="Compte credit:").grid(row=3, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.credit_var).grid(row=3, column=1, sticky="ew", pady=4, padx=(0, 8))
+
+        btns = ttk.Frame(form)
+        btns.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 6), padx=8)
+        btns.columnconfigure(0, weight=1)
+        btns.columnconfigure(1, weight=1)
+        btns.columnconfigure(2, weight=1)
+
+        ttk.Button(btns, text="Nouveau", command=self._clear_form).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(btns, text="Ajouter", command=self._add_row).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(btns, text="Modifier", command=self._update_row).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        ttk.Button(btns, text="Supprimer", command=self._delete_row).grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(6, 0))
+        ttk.Button(btns, text="Enregistrer", command=self._save).grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        ttk.Button(btns, text="Fermer", command=self.destroy).grid(row=1, column=2, sticky="ew", padx=(4, 0), pady=(6, 0))
+
+    def _load(self):
+        df, path = DataManager.load_operation_types_dataframe(self.settings_path)
+        self.settings_path = path
+        self.path_var.set(f"Fichier: {self.settings_path or 'sittings.xlsx'}")
+        self.df = df.copy() if df is not None else pd.DataFrame(columns=OP_COLUMNS)
+        for col in OP_COLUMNS:
+            if col not in self.df.columns:
+                self.df[col] = ""
+        self.df = self.df[OP_COLUMNS].fillna("").astype(str)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _refresh_tree(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for idx, row in self.df.iterrows():
+            self.tree.insert("", tk.END, iid=str(idx), values=tuple(row[col] for col in OP_COLUMNS))
+
+    def _on_select(self, _event=None):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        idx = int(selection[0])
+        if idx < 0 or idx >= len(self.df):
+            return
+        self.selected_index = idx
+        row = self.df.iloc[idx]
+        self.id_var.set(str(row.get("ID_PARAMETRE", "") or ""))
+        self.type_var.set(str(row.get("TYPE OPERATION", "") or ""))
+        self.debit_var.set(str(row.get("DEBIT", "") or ""))
+        self.credit_var.set(str(row.get("CREDIT", "") or ""))
+
+    def _clear_form(self):
+        self.selected_index = None
+        self.id_var.set(self._next_id())
+        self.type_var.set("")
+        self.debit_var.set("")
+        self.credit_var.set("")
+        self.tree.selection_remove(*self.tree.selection())
+
+    def _next_id(self):
+        max_id = 0
+        for value in self.df.get("ID_PARAMETRE", pd.Series(dtype=str)).astype(str):
+            text = value.strip()
+            if text.isdigit():
+                max_id = max(max_id, int(text))
+        return str(max_id + 1)
+
+    def _read_form(self):
+        row = {
+            "ID_PARAMETRE": self.id_var.get().strip() or self._next_id(),
+            "TYPE OPERATION": self.type_var.get().strip(),
+            "DEBIT": self.debit_var.get().strip(),
+            "CREDIT": self.credit_var.get().strip(),
+        }
+        if not row["TYPE OPERATION"]:
+            messagebox.showwarning("Operations", "Le type d'operation est obligatoire.", parent=self)
+            return None
+        if not row["DEBIT"] or not row["CREDIT"]:
+            messagebox.showwarning("Operations", "Les comptes debit/credit sont obligatoires.", parent=self)
+            return None
+        return row
+
+    def _add_row(self):
+        row = self._read_form()
+        if not row:
+            return
+        self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _update_row(self):
+        if self.selected_index is None:
+            messagebox.showwarning("Operations", "Selectionnez une ligne a modifier.", parent=self)
+            return
+        row = self._read_form()
+        if not row:
+            return
+        for key, value in row.items():
+            self.df.iloc[self.selected_index, self.df.columns.get_loc(key)] = value
+        self._refresh_tree()
+        self.tree.selection_set(str(self.selected_index))
+
+    def _delete_row(self):
+        if self.selected_index is None:
+            messagebox.showwarning("Operations", "Selectionnez une ligne a supprimer.", parent=self)
+            return
+        if not messagebox.askyesno("Operations", "Supprimer cette ligne ?", parent=self):
+            return
+        self.df = self.df.drop(index=self.selected_index).reset_index(drop=True)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _save(self):
+        ok = DataManager.save_operation_types_dataframe(self.df, self.settings_path)
+        if ok:
+            messagebox.showinfo("Operations", "Parametres enregistres.", parent=self)
+            self._load()
+
+
+class PCGWindow(tk.Toplevel):
+    """Fenetre CRUD du plan comptable general (PCG)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Gestion PCG")
+        self.geometry("860x460")
+        self.transient(parent)
+        self.grab_set()
+
+        self.pcg_path = DataManager.resolve_pcg_file()
+        self.df = pd.DataFrame(columns=PCG_COLUMNS)
+        self.selected_index = None
+        self._build()
+        self._load()
+
+    def _build(self):
+        root = ttk.Frame(self, padding=10)
+        root.pack(fill=tk.BOTH, expand=True)
+        root.columnconfigure(0, weight=3)
+        root.columnconfigure(1, weight=2)
+        root.rowconfigure(1, weight=1)
+
+        self.path_var = tk.StringVar(value="")
+        ttk.Label(root, textvariable=self.path_var, foreground="#4A5A57").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+
+        table_frame = ttk.LabelFrame(root, text="Comptes PCG")
+        table_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(table_frame, columns=PCG_COLUMNS, show="headings", height=14)
+        self.tree.heading("NUMERO", text="Numero")
+        self.tree.heading("LIBELLE", text="Libelle")
+        self.tree.column("NUMERO", width=140, anchor=tk.CENTER)
+        self.tree.column("LIBELLE", width=380, anchor=tk.W)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        form = ttk.LabelFrame(root, text="Edition")
+        form.grid(row=1, column=1, sticky="nsew")
+        form.columnconfigure(1, weight=1)
+
+        self.numero_var = tk.StringVar()
+        self.libelle_var = tk.StringVar()
+
+        ttk.Label(form, text="Numero compte:").grid(row=0, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.numero_var).grid(row=0, column=1, sticky="ew", pady=4, padx=(0, 8))
+        ttk.Label(form, text="Libelle compte:").grid(row=1, column=0, sticky="w", pady=4, padx=(8, 6))
+        ttk.Entry(form, textvariable=self.libelle_var).grid(row=1, column=1, sticky="ew", pady=4, padx=(0, 8))
+
+        btns = ttk.Frame(form)
+        btns.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 6), padx=8)
+        btns.columnconfigure(0, weight=1)
+        btns.columnconfigure(1, weight=1)
+        btns.columnconfigure(2, weight=1)
+
+        ttk.Button(btns, text="Nouveau", command=self._clear_form).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(btns, text="Ajouter", command=self._add_row).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(btns, text="Modifier", command=self._update_row).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        ttk.Button(btns, text="Supprimer", command=self._delete_row).grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(6, 0))
+        ttk.Button(btns, text="Enregistrer", command=self._save).grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        ttk.Button(btns, text="Fermer", command=self.destroy).grid(row=1, column=2, sticky="ew", padx=(4, 0), pady=(6, 0))
+
+    def _load(self):
+        df, path = DataManager.load_pcg_dataframe(self.pcg_path)
+        self.pcg_path = path
+        self.path_var.set(f"Fichier: {self.pcg_path or 'pcg.xlsx'}")
+        self.df = df.copy() if df is not None else pd.DataFrame(columns=PCG_COLUMNS)
+        for col in PCG_COLUMNS:
+            if col not in self.df.columns:
+                self.df[col] = ""
+        self.df = self.df[PCG_COLUMNS].fillna("").astype(str)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _refresh_tree(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for idx, row in self.df.iterrows():
+            self.tree.insert("", tk.END, iid=str(idx), values=(row["NUMERO"], row["LIBELLE"]))
+
+    def _on_select(self, _event=None):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        idx = int(selection[0])
+        if idx < 0 or idx >= len(self.df):
+            return
+        self.selected_index = idx
+        row = self.df.iloc[idx]
+        self.numero_var.set(str(row.get("NUMERO", "") or ""))
+        self.libelle_var.set(str(row.get("LIBELLE", "") or ""))
+
+    def _clear_form(self):
+        self.selected_index = None
+        self.numero_var.set("")
+        self.libelle_var.set("")
+        self.tree.selection_remove(*self.tree.selection())
+
+    def _read_form(self):
+        row = {
+            "NUMERO": self.numero_var.get().strip(),
+            "LIBELLE": self.libelle_var.get().strip(),
+        }
+        if not row["NUMERO"]:
+            messagebox.showwarning("PCG", "Le numero de compte est obligatoire.", parent=self)
+            return None
+        if not row["LIBELLE"]:
+            messagebox.showwarning("PCG", "Le libelle de compte est obligatoire.", parent=self)
+            return None
+        return row
+
+    def _add_row(self):
+        row = self._read_form()
+        if not row:
+            return
+        self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _update_row(self):
+        if self.selected_index is None:
+            messagebox.showwarning("PCG", "Selectionnez une ligne a modifier.", parent=self)
+            return
+        row = self._read_form()
+        if not row:
+            return
+        for key, value in row.items():
+            self.df.iloc[self.selected_index, self.df.columns.get_loc(key)] = value
+        self._refresh_tree()
+        self.tree.selection_set(str(self.selected_index))
+
+    def _delete_row(self):
+        if self.selected_index is None:
+            messagebox.showwarning("PCG", "Selectionnez une ligne a supprimer.", parent=self)
+            return
+        if not messagebox.askyesno("PCG", "Supprimer cette ligne ?", parent=self):
+            return
+        self.df = self.df.drop(index=self.selected_index).reset_index(drop=True)
+        self._refresh_tree()
+        self._clear_form()
+
+    def _save(self):
+        ok = DataManager.save_pcg_dataframe(self.df, self.pcg_path)
+        if ok:
+            if hasattr(self.parent, "charger_pcg"):
+                self.parent.charger_pcg()
+            messagebox.showinfo("PCG", "PCG enregistre.", parent=self)
+            self._load()
